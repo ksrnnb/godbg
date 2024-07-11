@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"log"
 	"os"
@@ -26,7 +27,9 @@ func main() {
 	}
 
 	var ws sys.WaitStatus
-	_, err := sys.Wait4(cmd.Process.Pid, &ws, 0, nil)
+	pid := cmd.Process.Pid
+
+	_, err := sys.Wait4(pid, &ws, 0, nil)
 	if err != nil {
 		log.Fatalf("failed to wait pid %d", cmd.Process.Pid)
 	}
@@ -36,11 +39,31 @@ func main() {
 		os.Exit(0)
 	}
 
-	pid := cmd.Process.Pid
-	if err := syscall.PtraceCont(pid, 0); err != nil {
-		log.Fatalf("failed to cont: %s", err)
+	sc := bufio.NewScanner(os.Stdin)
+	fmt.Print("godbg> ")
+
+	for sc.Scan() {
+		fmt.Printf("godbg> ")
+		s := sc.Text()
+
+		if s == "c" {
+			if err := syscall.PtraceCont(pid, 0); err != nil {
+				log.Fatalf("failed to cont: %s", err)
+			}
+		} else if s == "q" {
+			// TODO: if child process is not terminated, wait4 waits forever...
+			break
+		}
 	}
 
-	// do something
+	_, err = sys.Wait4(pid, &ws, 0, nil)
+	if err != nil {
+		log.Fatalf("failed to wait pid %d", cmd.Process.Pid)
+	}
+
+	if !ws.Exited() {
+		log.Fatalf("unexpected wait status %d", ws)
+	}
+
 	fmt.Println("process has been completed.")
 }

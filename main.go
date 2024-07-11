@@ -6,11 +6,14 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+
+	sys "golang.org/x/sys/unix"
 )
 
 func main() {
 	cmd := exec.Command("/home/kyota/src/godbg/hello")
 
+	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -22,14 +25,21 @@ func main() {
 		log.Fatalf("failed to start command: %s", err)
 	}
 
-
-	if err := cmd.Wait(); err != nil {
-		log.Fatalf("failed to wait process: %s", err)
+	var ws sys.WaitStatus
+	_, err := sys.Wait4(cmd.Process.Pid, &ws, 0, nil)
+	if err != nil {
+		log.Fatalf("failed to wait pid %d", cmd.Process.Pid)
 	}
 
+	if ws.Exited() {
+		fmt.Println("process exited")
+		os.Exit(0)
+	}
 
 	pid := cmd.Process.Pid
-	syscall.PtraceCont(pid, 0)
+	if err := syscall.PtraceCont(pid, 0); err != nil {
+		log.Fatalf("failed to cont: %s", err)
+	}
 
 	// do something
 	fmt.Println("process has been completed.")

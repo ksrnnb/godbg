@@ -4,17 +4,45 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"syscall"
 
 	sys "golang.org/x/sys/unix"
 )
 
 type Debugger struct {
-	pid int
+	pid    int
+	offset uint64
 }
 
-func NewDebugger(pid int) Debugger {
-	return Debugger{pid: pid}
+func getOffset(pid int) (uint64, error) {
+	filePath := fmt.Sprintf("/proc/%d/maps", pid)
+	file, err := os.Open(filePath)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	if scanner.Scan() {
+		line := scanner.Text()
+		s := strings.Split(line, "-")
+		return strconv.ParseUint(s[0], 16, 64)
+	}
+
+	return 0, fmt.Errorf("failed to get offset for pid %d", pid)
+}
+
+func NewDebugger(pid int) (Debugger, error) {
+	offset, err := getOffset(pid)
+	if err != nil {
+		return Debugger{}, nil
+	}
+
+	fmt.Printf("offset is %x\n", offset)
+
+	return Debugger{pid: pid, offset: offset}, nil
 }
 
 func (d *Debugger) Run() error {

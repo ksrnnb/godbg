@@ -23,7 +23,11 @@ func main() {
 		log.Fatalf("failed to start command: %s", err)
 	}
 
-	dbg := NewDebugger(cmd.Process.Pid)
+	dbg, err := NewDebugger(cmd.Process.Pid)
+	if err != nil {
+		log.Fatalf("failed to set up debugger: %s", err)
+	}
+
 	if err := dbg.Run(); err != nil {
 		log.Fatalf("failed to run debugger: %s", err)
 	}

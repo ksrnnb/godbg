@@ -26,21 +26,41 @@ func (d *Debugger) Run() error {
 	fmt.Print("godbg> ")
 
 	for sc.Scan() {
-		fmt.Printf("godbg> ")
 		s := sc.Text()
 
-		if s == "c" {
-			if err := syscall.PtraceCont(d.pid, 0); err != nil {
-				return fmt.Errorf("failed to cont: %s", err)
-			}
-		} else if s == "q" {
-			// TODO: if child process is not terminated, wait4 waits forever...
-			break
+		if err := d.handleInput(s); err != nil {
+			return err
 		}
+
+		fmt.Printf("godbg> ")
 	}
 
-	if err := d.waitSignal(); err != nil {
-		return err
+	return nil
+}
+
+func (d *Debugger) handleInput(input string) error {
+	cmd, err := NewCommand(input)
+	if err != nil {
+		fmt.Printf("failed to parse command: %s\n", err)
+		return nil
+	}
+
+	switch cmd.Type {
+	case ContinueCommand:
+		if err := syscall.PtraceCont(d.pid, 0); err != nil {
+			return fmt.Errorf("failed to cont: %s", err)
+		}
+
+		if err := d.waitSignal(); err != nil {
+			return err
+		}
+	case QuitCommand:
+		fmt.Println("quit process")
+		os.Exit(0)
+	case BreakCommand:
+		fmt.Printf("break command with %s\n", cmd.Args[0])
+	default:
+		return nil
 	}
 
 	return nil

@@ -1,14 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"syscall"
-
-	sys "golang.org/x/sys/unix"
 )
 
 func main() {
@@ -26,43 +23,9 @@ func main() {
 		log.Fatalf("failed to start command: %s", err)
 	}
 
-	var ws sys.WaitStatus
-	pid := cmd.Process.Pid
-
-	_, err := sys.Wait4(pid, &ws, 0, nil)
-	if err != nil {
-		log.Fatalf("failed to wait pid %d", cmd.Process.Pid)
-	}
-
-	if ws.Exited() {
-		fmt.Println("process exited")
-		os.Exit(0)
-	}
-
-	sc := bufio.NewScanner(os.Stdin)
-	fmt.Print("godbg> ")
-
-	for sc.Scan() {
-		fmt.Printf("godbg> ")
-		s := sc.Text()
-
-		if s == "c" {
-			if err := syscall.PtraceCont(pid, 0); err != nil {
-				log.Fatalf("failed to cont: %s", err)
-			}
-		} else if s == "q" {
-			// TODO: if child process is not terminated, wait4 waits forever...
-			break
-		}
-	}
-
-	_, err = sys.Wait4(pid, &ws, 0, nil)
-	if err != nil {
-		log.Fatalf("failed to wait pid %d", cmd.Process.Pid)
-	}
-
-	if !ws.Exited() {
-		log.Fatalf("unexpected wait status %d", ws)
+	dbg := NewDebugger(cmd.Process.Pid)
+	if err := dbg.Run(); err != nil {
+		log.Fatalf("failed to run debugger: %s", err)
 	}
 
 	fmt.Println("process has been completed.")

@@ -18,16 +18,8 @@ func NewDebugger(pid int) Debugger {
 }
 
 func (d *Debugger) Run() error {
-	var ws sys.WaitStatus
-
-	_, err := sys.Wait4(d.pid, &ws, 0, nil)
-	if err != nil {
-		return fmt.Errorf("failed to wait pid %d", d.pid)
-	}
-
-	if ws.Exited() {
-		fmt.Println("process exited")
-		os.Exit(0)
+	if err := d.waitSignal(); err != nil {
+		return err
 	}
 
 	sc := bufio.NewScanner(os.Stdin)
@@ -47,13 +39,24 @@ func (d *Debugger) Run() error {
 		}
 	}
 
-	_, err = sys.Wait4(d.pid, &ws, 0, nil)
+	if err := d.waitSignal(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (d *Debugger) waitSignal() error {
+	var ws sys.WaitStatus
+
+	_, err := sys.Wait4(d.pid, &ws, 0, nil)
 	if err != nil {
 		return fmt.Errorf("failed to wait pid %d", d.pid)
 	}
 
-	if !ws.Exited() {
-		return fmt.Errorf("unexpected wait status %d", ws)
+	if ws.Exited() {
+		fmt.Println("process exited")
+		os.Exit(0)
 	}
 
 	return nil

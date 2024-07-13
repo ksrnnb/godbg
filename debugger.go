@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -15,6 +17,10 @@ type Debugger struct {
 	pid    int
 	offset uint64
 }
+
+const MainFunctionSymbol = "main.main"
+
+var mainReg = regexp.MustCompile(`^<([^>]+)>:$`)
 
 func getOffset(pid int) (uint64, error) {
 	filePath := fmt.Sprintf("/proc/%d/maps", pid)
@@ -34,13 +40,54 @@ func getOffset(pid int) (uint64, error) {
 	return 0, fmt.Errorf("failed to get offset for pid %d", pid)
 }
 
-func NewDebugger(pid int) (Debugger, error) {
+func getMainAddress(path string) (uint64, error) {
+	cmd := exec.Command("objdump", "-d", path)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return 0, err
+	}
+
+	if err := cmd.Start(); err != nil {
+		return 0, err
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		line := scanner.Text()
+		s := strings.Split(line, " ")
+		if len(s) <= 1 {
+			continue
+		}
+
+		match := mainReg.FindStringSubmatch(s[1])
+
+		if len(match) <= 1 {
+			continue
+		}
+
+		if match[1] != MainFunctionSymbol {
+			continue
+		}
+
+		return strconv.ParseUint(s[0], 16, 64)
+	}
+
+	return 0, fmt.Errorf("failed to get main function address for %s", path)
+}
+
+func NewDebugger(pid int, debuggeePath string) (Debugger, error) {
 	offset, err := getOffset(pid)
 	if err != nil {
-		return Debugger{}, nil
+		return Debugger{}, err
 	}
 
 	fmt.Printf("offset is %x\n", offset)
+	mainAddr, err := getMainAddress(debuggeePath)
+	if err != nil {
+		return Debugger{}, err
+	}
+
+	fmt.Printf("main address is %x\n", mainAddr)
 
 	return Debugger{pid: pid, offset: offset}, nil
 }

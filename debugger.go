@@ -14,8 +14,9 @@ import (
 )
 
 type Debugger struct {
-	pid    int
-	offset uint64
+	pid         int
+	offset      uint64
+	breakpoints map[uint64]Breakpoint
 }
 
 const MainFunctionSymbol = "main.main"
@@ -89,7 +90,7 @@ func NewDebugger(pid int, debuggeePath string) (Debugger, error) {
 
 	fmt.Printf("main address is %x\n", mainAddr)
 
-	return Debugger{pid: pid, offset: offset}, nil
+	return Debugger{pid: pid, offset: offset, breakpoints: make(map[uint64]Breakpoint)}, nil
 }
 
 func (d *Debugger) Run() error {
@@ -134,6 +135,9 @@ func (d *Debugger) handleInput(input string) error {
 		os.Exit(0)
 	case BreakCommand:
 		fmt.Printf("break command with %s\n", cmd.Args[0])
+		if err := d.handleBreakCommand(cmd.Args); err != nil {
+			return err
+		}
 	default:
 		return nil
 	}
@@ -154,5 +158,19 @@ func (d *Debugger) waitSignal() error {
 		os.Exit(0)
 	}
 
+	return nil
+}
+
+func (d *Debugger) handleBreakCommand(args []string) error {
+	addr, err := strconv.ParseUint(args[0], 16, 64)
+	if err != nil {
+		return err
+	}
+
+	bp := NewBreakpoint(d.pid, addr)
+	bp.Enable()
+
+	fmt.Printf("set breakpoint at address 0x%x", addr)
+	d.breakpoints[addr] = bp
 	return nil
 }

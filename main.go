@@ -10,7 +10,7 @@ import (
 	sys "golang.org/x/sys/unix"
 )
 
-const debuggee = "/home/kyota/src/godbg/hello"
+const debuggee = "/home/kyota/src/godbg/hello.o"
 
 func main() {
 	pid, err := execChildProcess()

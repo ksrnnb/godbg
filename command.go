@@ -9,12 +9,16 @@ const (
 	ContinueCommand = "continue"
 	QuitCommand     = "quit"
 	BreakCommand    = "break"
+	RegisterCommand = "register"
 	UnknownCommand  = "unknown"
+
+	DumpSubCommand = "dump"
 )
 
 type Command struct {
-	Type string
-	Args []string
+	Type    string
+	SubType string
+	Args    []string
 }
 
 func NewCommand(input string) (Command, error) {
@@ -38,6 +42,18 @@ func NewCommand(input string) (Command, error) {
 		}
 
 		return Command{Type: BreakCommand, Args: s[1:]}, nil
+	}
+
+	if strings.HasPrefix(RegisterCommand, s[0]) {
+		//		if len(s) <= 1 {
+		//			return Command{}, errors.New("register command must have at least 1 argument")
+		//		}
+
+		//		if s[1] != DumpSubCommand {
+		//			return Command{}, fmt.Errorf("unexpected register sub command '%s' is given", s[1])
+		//		}
+
+		return Command{Type: RegisterCommand, SubType: DumpSubCommand}, nil
 	}
 
 	return Command{Type: UnknownCommand}, nil

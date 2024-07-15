@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -14,9 +13,10 @@ import (
 )
 
 type Debugger struct {
-	pid         int
-	offset      uint64
-	breakpoints map[uint64]Breakpoint
+	pid            int
+	offset         uint64
+	breakpoints    map[uint64]Breakpoint
+	registerClient RegisterClient
 }
 
 const MainFunctionSymbol = "main.main"
@@ -41,41 +41,6 @@ func getOffset(pid int) (uint64, error) {
 	return 0, fmt.Errorf("failed to get offset for pid %d", pid)
 }
 
-func getMainAddress(path string) (uint64, error) {
-	cmd := exec.Command("objdump", "-d", path)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return 0, err
-	}
-
-	if err := cmd.Start(); err != nil {
-		return 0, err
-	}
-
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		line := scanner.Text()
-		s := strings.Split(line, " ")
-		if len(s) <= 1 {
-			continue
-		}
-
-		match := mainReg.FindStringSubmatch(s[1])
-
-		if len(match) <= 1 {
-			continue
-		}
-
-		if match[1] != MainFunctionSymbol {
-			continue
-		}
-
-		return strconv.ParseUint(s[0], 16, 64)
-	}
-
-	return 0, fmt.Errorf("failed to get main function address for %s", path)
-}
-
 func NewDebugger(pid int, debuggeePath string) (Debugger, error) {
 	offset, err := getOffset(pid)
 	if err != nil {
@@ -83,14 +48,13 @@ func NewDebugger(pid int, debuggeePath string) (Debugger, error) {
 	}
 
 	fmt.Printf("offset is %x\n", offset)
-	mainAddr, err := getMainAddress(debuggeePath)
-	if err != nil {
-		return Debugger{}, err
-	}
 
-	fmt.Printf("main address is %x\n", mainAddr)
-
-	return Debugger{pid: pid, offset: offset, breakpoints: make(map[uint64]Breakpoint)}, nil
+	return Debugger{
+		pid:            pid,
+		offset:         offset,
+		breakpoints:    make(map[uint64]Breakpoint),
+		registerClient: NewRegisterClient(pid),
+	}, nil
 }
 
 func (d *Debugger) Run() error {
@@ -124,20 +88,24 @@ func (d *Debugger) handleInput(input string) error {
 	switch cmd.Type {
 	case ContinueCommand:
 		if err := syscall.PtraceCont(d.pid, 0); err != nil {
-			return fmt.Errorf("failed to cont: %s", err)
-		}
-
-		if err := d.waitSignal(); err != nil {
-			return err
+			fmt.Printf("failed to cont: %s\n", err)
+		} else {
+			if err := d.waitSignal(); err != nil {
+				return err
+			}
 		}
 	case QuitCommand:
 		fmt.Println("quit process")
 		os.Exit(0)
 	case BreakCommand:
-		fmt.Printf("break command with %s\n", cmd.Args[0])
 		if err := d.handleBreakCommand(cmd.Args); err != nil {
-			return err
+			fmt.Printf("failed to handle break command: %s\n", err)
 		}
+	case RegisterCommand:
+		if err := d.handleRegisterCommand(cmd); err != nil {
+			fmt.Printf("faield to handle register command: %s\n", err)
+		}
+		return nil
 	default:
 		return nil
 	}
@@ -147,8 +115,7 @@ func (d *Debugger) handleInput(input string) error {
 
 func (d *Debugger) waitSignal() error {
 	var ws sys.WaitStatus
-
-	_, err := sys.Wait4(d.pid, &ws, 0, nil)
+	_, err := sys.Wait4(d.pid, &ws, sys.WALL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to wait pid %d", d.pid)
 	}
@@ -156,6 +123,14 @@ func (d *Debugger) waitSignal() error {
 	if ws.Exited() {
 		fmt.Println("process exited")
 		os.Exit(0)
+	}
+
+	if ws.Signaled() {
+		fmt.Printf("Process received signal %s\n", ws.Signal())
+	}
+
+	if ws.Stopped() {
+		fmt.Printf("Process stopped with signal: %s\n", ws.StopSignal())
 	}
 
 	return nil
@@ -170,7 +145,19 @@ func (d *Debugger) handleBreakCommand(args []string) error {
 	bp := NewBreakpoint(d.pid, addr)
 	bp.Enable()
 
-	fmt.Printf("set breakpoint at address 0x%x", addr)
+	fmt.Printf("set breakpoint at address 0x%x\n", addr)
 	d.breakpoints[addr] = bp
 	return nil
+}
+
+func (d *Debugger) handleRegisterCommand(cmd Command) error {
+	switch cmd.SubType {
+	case DumpSubCommand:
+		if err := d.registerClient.DumpRegisters(); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	return fmt.Errorf("unexptected sub command %s is given", cmd.SubType)
 }

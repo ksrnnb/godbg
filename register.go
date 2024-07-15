@@ -48,8 +48,8 @@ func NewRegisterClient(pid int) RegisterClient {
 }
 
 func (c RegisterClient) GetRegisterValue(register Register) (uint64, error) {
-	var regs sys.PtraceRegs
-	if err := sys.PtraceGetRegs(c.pid, &regs); err != nil {
+	regs := &sys.PtraceRegs{}
+	if err := sys.PtraceGetRegs(c.pid, regs); err != nil {
 		return 0, err
 	}
 
@@ -66,8 +66,8 @@ func (c RegisterClient) GetRegisterValue(register Register) (uint64, error) {
 }
 
 func (c RegisterClient) SetRegisterValue(register Register, value uint64) error {
-	var regs sys.PtraceRegs
-	if err := sys.PtraceGetRegs(c.pid, &regs); err != nil {
+	regs := &sys.PtraceRegs{}
+	if err := sys.PtraceGetRegs(c.pid, regs); err != nil {
 		return err
 	}
 
@@ -84,7 +84,7 @@ func (c RegisterClient) SetRegisterValue(register Register, value uint64) error 
 	}
 	field.SetUint(value)
 
-	return sys.PtraceSetRegs(c.pid, &regs)
+	return sys.PtraceSetRegs(c.pid, regs)
 }
 
 func (c RegisterClient) DumpRegisters() error {

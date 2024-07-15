@@ -115,7 +115,7 @@ func (d *Debugger) handleInput(input string) error {
 
 func (d *Debugger) waitSignal() error {
 	var ws sys.WaitStatus
-	_, err := sys.Wait4(d.pid, &ws, sys.WALL, nil)
+	_, err := sys.Wait4(d.pid, &ws, 0, nil)
 	if err != nil {
 		return fmt.Errorf("failed to wait pid %d", d.pid)
 	}

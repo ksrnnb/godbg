@@ -58,7 +58,7 @@ func NewDebugger(pid int, debuggeePath string) (Debugger, error) {
 }
 
 func (d *Debugger) Run() error {
-	if err := d.waitSignal(); err != nil {
+	if _, err := d.waitSignal(); err != nil {
 		return err
 	}
 
@@ -87,12 +87,8 @@ func (d *Debugger) handleInput(input string) error {
 
 	switch cmd.Type {
 	case ContinueCommand:
-		if err := syscall.PtraceCont(d.pid, 0); err != nil {
-			fmt.Printf("failed to cont: %s\n", err)
-		} else {
-			if err := d.waitSignal(); err != nil {
-				return err
-			}
+		if err := d.handleContinueCommand(); err != nil {
+			return err
 		}
 	case QuitCommand:
 		fmt.Println("quit process")
@@ -113,11 +109,11 @@ func (d *Debugger) handleInput(input string) error {
 	return nil
 }
 
-func (d *Debugger) waitSignal() error {
+func (d *Debugger) waitSignal() (syscall.Signal, error) {
 	var ws sys.WaitStatus
 	_, err := sys.Wait4(d.pid, &ws, 0, nil)
 	if err != nil {
-		return fmt.Errorf("failed to wait pid %d", d.pid)
+		return 0, fmt.Errorf("failed to wait pid %d", d.pid)
 	}
 
 	if ws.Exited() {
@@ -127,10 +123,83 @@ func (d *Debugger) waitSignal() error {
 
 	if ws.Signaled() {
 		fmt.Printf("Process received signal %s\n", ws.Signal())
+		return ws.Signal(), nil
 	}
 
 	if ws.Stopped() {
-		fmt.Printf("Process stopped with signal: %s\n", ws.StopSignal())
+		fmt.Printf("Process stopped with signal: %s, cause: %d\n", ws.StopSignal(), ws.TrapCause())
+		return ws.StopSignal(), nil
+	}
+
+	return 0, nil
+}
+
+func (d *Debugger) getPC() (uint64, error) {
+	return d.registerClient.GetRegisterValue(Rip)
+}
+
+func (d *Debugger) setPC(pc uint64) error {
+	return d.registerClient.SetRegisterValue(Rip, pc)
+}
+
+func (d *Debugger) stepOverBreakpointIfNeeded() error {
+	pc, err := d.getPC()
+	if err != nil {
+		return err
+	}
+
+	// -1 is necessasry because PC is incremented when debugee stops at INT3 instruction
+	breakpointPC := pc - 1
+	bp, ok := d.breakpoints[breakpointPC]
+	if !ok {
+		return nil
+	}
+
+	if !bp.isEnabled {
+		return nil
+	}
+
+	// handle breakpoint from here
+	if err := d.setPC(breakpointPC); err != nil {
+		return err
+	}
+
+	if err := bp.Disable(); err != nil {
+		return err
+	}
+
+	if err := sys.PtraceSingleStep(d.pid); err != nil {
+		return err
+	}
+
+	fmt.Println("single steppppppp")
+
+	if _, err := d.waitSignal(); err != nil {
+		return err
+	}
+
+	if err := bp.Enable(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (d *Debugger) handleContinueCommand() error {
+	if err := d.stepOverBreakpointIfNeeded(); err != nil {
+		return err
+	}
+
+	if err := syscall.PtraceCont(d.pid, 0); err != nil {
+		fmt.Printf("failed to cont: %s\n", err)
+		return nil
+	}
+
+	if sig, err := d.waitSignal(); err != nil {
+		return err
+	} else if sig == syscall.SIGURG {
+		// TODO: investigate why SIGURG is notified.
+		return d.handleContinueCommand()
 	}
 
 	return nil

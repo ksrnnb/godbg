@@ -2,12 +2,14 @@ package main
 
 import (
 	"bufio"
+	"debug/gosym"
 	"fmt"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
+	"unsafe"
 
 	sys "golang.org/x/sys/unix"
 )
@@ -17,9 +19,19 @@ type Debugger struct {
 	offset         uint64
 	breakpoints    map[uint64]Breakpoint
 	registerClient RegisterClient
+	debuggeePath   string
+	symTable       *gosym.Table
 }
 
 const MainFunctionSymbol = "main.main"
+
+const (
+	// you can see signal code by "cat /usr/include/asm-generic/siginfo.h"
+	SignalCodeTrapBreakpoint = 1
+	SignalCodeTrapTrace      = 2
+
+	SignalCodeKernel = 0x80
+)
 
 var mainReg = regexp.MustCompile(`^<([^>]+)>:$`)
 
@@ -49,11 +61,18 @@ func NewDebugger(pid int, debuggeePath string) (Debugger, error) {
 
 	fmt.Printf("offset is %x\n", offset)
 
+	symTable, err := NewSymbolTable(debuggeePath)
+	if err != nil {
+		return Debugger{}, nil
+	}
+
 	return Debugger{
 		pid:            pid,
 		offset:         offset,
 		breakpoints:    make(map[uint64]Breakpoint),
 		registerClient: NewRegisterClient(pid),
+		debuggeePath:   debuggeePath,
+		symTable:       symTable,
 	}, nil
 }
 
@@ -122,16 +141,65 @@ func (d *Debugger) waitSignal() (syscall.Signal, error) {
 	}
 
 	if ws.Signaled() {
-		fmt.Printf("Process received signal %s\n", ws.Signal())
 		return ws.Signal(), nil
 	}
 
 	if ws.Stopped() {
-		fmt.Printf("Process stopped with signal: %s, cause: %d\n", ws.StopSignal(), ws.TrapCause())
+		if err := d.handleStopSignal(); err != nil {
+			return ws.StopSignal(), err
+		}
 		return ws.StopSignal(), nil
 	}
 
 	return 0, nil
+}
+
+func (d *Debugger) handleStopSignal() error {
+	var sigInfo sys.Siginfo
+	_, _, errno := syscall.Syscall6(uintptr(syscall.SYS_PTRACE), uintptr(sys.PTRACE_GETSIGINFO), uintptr(d.pid), 0, uintptr(unsafe.Pointer(&sigInfo)), 0, 0)
+
+	if errno != 0 {
+		err := sys.Errno(errno)
+		return fmt.Errorf("failed to get siginfo: %s", err)
+	}
+
+	switch sigInfo.Code {
+	case SignalCodeTrapTrace:
+		// When sigle step is called, sig_code will be TRAP_TRACE
+	case SignalCodeTrapBreakpoint, SignalCodeKernel:
+		// When breakpoint is hit, SI_KERNEL or TRAP_BRKPT signal code is sent
+		if err := d.handleHitBreakpoint(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (d *Debugger) handleHitBreakpoint() error {
+	pc, err := d.getPC()
+	if err != nil {
+		return err
+	}
+
+	newPC := pc - 1
+	if err := d.setPC(newPC); err != nil {
+		return err
+	}
+
+	fmt.Printf("hit breakpoint at address 0x%x\n", newPC)
+
+	// TODO: print source file and line
+	filename, line, _ := d.symTable.PCToLine(newPC)
+
+	f, err := os.Open(filename)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	printSourceCode(f, line)
+	return nil
 }
 
 func (d *Debugger) getPC() (uint64, error) {
@@ -148,9 +216,7 @@ func (d *Debugger) stepOverBreakpointIfNeeded() error {
 		return err
 	}
 
-	// -1 is necessasry because PC is incremented when debugee stops at INT3 instruction
-	breakpointPC := pc - 1
-	bp, ok := d.breakpoints[breakpointPC]
+	bp, ok := d.breakpoints[pc]
 	if !ok {
 		return nil
 	}
@@ -160,10 +226,6 @@ func (d *Debugger) stepOverBreakpointIfNeeded() error {
 	}
 
 	// handle breakpoint from here
-	if err := d.setPC(breakpointPC); err != nil {
-		return err
-	}
-
 	if err := bp.Disable(); err != nil {
 		return err
 	}
@@ -171,8 +233,6 @@ func (d *Debugger) stepOverBreakpointIfNeeded() error {
 	if err := sys.PtraceSingleStep(d.pid); err != nil {
 		return err
 	}
-
-	fmt.Println("single steppppppp")
 
 	if _, err := d.waitSignal(); err != nil {
 		return err

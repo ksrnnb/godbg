@@ -12,6 +12,8 @@ import (
 
 const debuggee = "/home/kyota/src/godbg/hello.o"
 
+// const debuggee = "/home/kyota/src/godbg/hello"
+
 func main() {
 	pid, err := execChildProcess()
 	if err != nil {

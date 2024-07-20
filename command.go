@@ -2,17 +2,21 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 )
 
 const (
-	ContinueCommand = "continue"
-	QuitCommand     = "quit"
-	BreakCommand    = "break"
-	RegisterCommand = "register"
-	UnknownCommand  = "unknown"
-
-	DumpSubCommand = "dump"
+	ContinueCommand              = "continue"
+	QuitCommand                  = "quit"
+	BreakCommand                 = "break"
+	RegisterCommand              = "register"
+	DumpSubCommand               = "dump"
+	SingleStepInstructionCommand = "si"
+	StepInCommand                = "stepin"
+	NextCommand                  = "next"
+	StepOutCommand               = "stepout"
+	UnknownCommand               = "unknown"
 )
 
 type Command struct {
@@ -45,15 +49,31 @@ func NewCommand(input string) (Command, error) {
 	}
 
 	if strings.HasPrefix(RegisterCommand, s[0]) {
-		//		if len(s) <= 1 {
-		//			return Command{}, errors.New("register command must have at least 1 argument")
-		//		}
+		if len(s) <= 1 {
+			return Command{}, errors.New("register command must have at least 1 argument")
+		}
 
-		//		if s[1] != DumpSubCommand {
-		//			return Command{}, fmt.Errorf("unexpected register sub command '%s' is given", s[1])
-		//		}
+		if s[1] != DumpSubCommand {
+			return Command{}, fmt.Errorf("unexpected register sub command '%s' is given", s[1])
+		}
 
 		return Command{Type: RegisterCommand, SubType: DumpSubCommand}, nil
+	}
+
+	if strings.HasPrefix(SingleStepInstructionCommand, s[0]) {
+		return Command{Type: SingleStepInstructionCommand}, nil
+	}
+
+	if strings.HasPrefix(StepInCommand, s[0]) {
+		return Command{Type: StepInCommand}, nil
+	}
+
+	if strings.HasPrefix(StepOutCommand, s[0]) {
+		return Command{Type: StepOutCommand}, nil
+	}
+
+	if strings.HasPrefix(NextCommand, s[0]) {
+		return Command{Type: NextCommand}, nil
 	}
 
 	return Command{Type: UnknownCommand}, nil

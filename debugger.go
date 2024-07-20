@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"debug/gosym"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"regexp"
@@ -93,6 +94,18 @@ func (d *Debugger) HandleCommand(cmd Command) error {
 		if err := d.handleRegisterCommand(cmd); err != nil {
 			fmt.Printf("faield to handle register command: %s\n", err)
 		}
+	case SingleStepInstructionCommand:
+		if err := d.handleSingleStepInstructionCommand(); err != nil {
+			fmt.Printf("failed to handle single step instruction: %s\n", err)
+		}
+	case StepOutCommand:
+		if err := d.handleStepOutCommand(); err != nil {
+			fmt.Printf("failed to handle step in instruction: %s\n", err)
+		}
+	case StepInCommand:
+		if err := d.handleStepInCommand(); err != nil {
+			fmt.Printf("failed to handle step in instruction: %s\n", err)
+		}
 	default:
 		return nil
 	}
@@ -165,17 +178,7 @@ func (d *Debugger) handleHitBreakpoint() error {
 
 	fmt.Printf("hit breakpoint at address 0x%x\n", newPC)
 
-	// TODO: print source file and line
-	filename, line, _ := d.symTable.PCToLine(newPC)
-
-	f, err := os.Open(filename)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	printSourceCode(f, line)
-	return nil
+	return d.printSourceCode()
 }
 
 func (d *Debugger) getPC() (uint64, error) {
@@ -186,6 +189,44 @@ func (d *Debugger) setPC(pc uint64) error {
 	return d.registerClient.SetRegisterValue(Rip, pc)
 }
 
+func (d *Debugger) setBreakpoint(addr uint64) {
+	bp := NewBreakpoint(d.pid, addr)
+	bp.Enable()
+
+	fmt.Printf("set breakpoint at address 0x%x\n", addr)
+	d.breakpoints[addr] = bp
+}
+
+func (d *Debugger) removeBreakpoint(addr uint64) {
+	bp, ok := d.breakpoints[addr]
+	if ok {
+		// breakpoint must be disabled before delete it from map
+		bp.Disable()
+	}
+
+	delete(d.breakpoints, addr)
+}
+
+func (d *Debugger) singleStepInstruction() error {
+	pc, err := d.getPC()
+	if err != nil {
+		return err
+	}
+
+	_, ok := d.breakpoints[pc]
+	if ok {
+		return d.stepOverBreakpointIfNeeded()
+	}
+
+	// if breakpoint is not exist,
+	if err := sys.PtraceSingleStep(d.pid); err != nil {
+		return err
+	}
+
+	_, err = d.WaitSignal()
+	return err
+}
+
 func (d *Debugger) stepOverBreakpointIfNeeded() error {
 	pc, err := d.getPC()
 	if err != nil {
@@ -194,10 +235,12 @@ func (d *Debugger) stepOverBreakpointIfNeeded() error {
 
 	bp, ok := d.breakpoints[pc]
 	if !ok {
+		fmt.Printf("break point is not found at %x\n", pc)
 		return nil
 	}
 
 	if !bp.isEnabled {
+		fmt.Printf("break point is not enabled at %x\n", pc)
 		return nil
 	}
 
@@ -222,6 +265,10 @@ func (d *Debugger) stepOverBreakpointIfNeeded() error {
 }
 
 func (d *Debugger) handleContinueCommand() error {
+	return d.continueInstruction()
+}
+
+func (d *Debugger) continueInstruction() error {
 	if err := d.stepOverBreakpointIfNeeded(); err != nil {
 		return err
 	}
@@ -235,7 +282,7 @@ func (d *Debugger) handleContinueCommand() error {
 		return err
 	} else if sig == syscall.SIGURG {
 		// TODO: investigate why SIGURG is notified.
-		return d.handleContinueCommand()
+		return d.continueInstruction()
 	}
 
 	return nil
@@ -247,11 +294,7 @@ func (d *Debugger) handleBreakCommand(args []string) error {
 		return err
 	}
 
-	bp := NewBreakpoint(d.pid, addr)
-	bp.Enable()
-
-	fmt.Printf("set breakpoint at address 0x%x\n", addr)
-	d.breakpoints[addr] = bp
+	d.setBreakpoint(addr)
 	return nil
 }
 
@@ -265,4 +308,98 @@ func (d *Debugger) handleRegisterCommand(cmd Command) error {
 	}
 
 	return fmt.Errorf("unexptected sub command %s is given", cmd.SubType)
+}
+
+func (d *Debugger) handleSingleStepInstructionCommand() error {
+	if err := d.singleStepInstruction(); err != nil {
+		return err
+	}
+
+	return d.printSourceCode()
+}
+
+func (d *Debugger) handleStepOutCommand() error {
+	rbp, err := d.registerClient.GetRegisterValue(Rbp)
+	if err != nil {
+		return fmt.Errorf("faield to read register in step out command: %s", err)
+	}
+
+	returnAddress, err := d.readMemory(rbp + 8)
+	if err != nil {
+		return err
+	}
+
+	_, ok := d.breakpoints[returnAddress]
+	if !ok {
+		d.setBreakpoint(returnAddress)
+	}
+
+	if err := d.continueInstruction(); err != nil {
+		return err
+	}
+
+	if !ok {
+		d.removeBreakpoint(returnAddress)
+	}
+
+	return nil
+}
+
+func (d *Debugger) handleStepInCommand() error {
+	pc, err := d.getPC()
+	if err != nil {
+		return err
+	}
+
+	filename, line, _ := d.symTable.PCToLine(pc)
+
+	if err := d.stepIn(filename, line); err != nil {
+		return err
+	}
+
+	return d.printSourceCode()
+}
+
+func (d *Debugger) stepIn(filename string, line int) error {
+	pc, err := d.getPC()
+	if err != nil {
+		return err
+	}
+
+	f, l, _ := d.symTable.PCToLine(pc)
+	if f == filename && l == line {
+		return d.stepIn(filename, line)
+	}
+
+	return nil
+}
+
+func (d *Debugger) readMemory(addr uint64) (uint64, error) {
+	// data is 8 byte to store uint64 value
+	data := make([]byte, 8)
+	_, err := sys.PtracePeekData(d.pid, uintptr(addr), data)
+	if err != nil {
+		return 0, err
+	}
+
+	return binary.LittleEndian.Uint64(data), nil
+}
+
+func (d *Debugger) printSourceCode() error {
+	pc, err := d.getPC()
+	if err != nil {
+		return err
+	}
+
+	filename, line, _ := d.symTable.PCToLine(pc)
+
+	f, err := os.Open(filename)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	printSourceCode(f, line)
+
+	return nil
 }

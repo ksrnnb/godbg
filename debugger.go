@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"debug/gosym"
 	"encoding/binary"
 	"fmt"
 	"os"
@@ -21,7 +20,7 @@ type Debugger struct {
 	breakpoints    map[uint64]Breakpoint
 	registerClient RegisterClient
 	debuggeePath   string
-	symTable       *gosym.Table
+	symTable       *SymbolTable
 }
 
 const MainFunctionSymbol = "main.main"
@@ -100,11 +99,15 @@ func (d *Debugger) HandleCommand(cmd Command) error {
 		}
 	case StepOutCommand:
 		if err := d.handleStepOutCommand(); err != nil {
-			fmt.Printf("failed to handle step in instruction: %s\n", err)
+			fmt.Printf("failed to handle step out command: %s\n", err)
 		}
 	case StepInCommand:
 		if err := d.handleStepInCommand(); err != nil {
-			fmt.Printf("failed to handle step in instruction: %s\n", err)
+			fmt.Printf("failed to handle step in comand: %s\n", err)
+		}
+	case NextCommand:
+		if err := d.handleNextCommand(); err != nil {
+			fmt.Printf("failed to handle next command: %s\n", err)
 		}
 	default:
 		return nil
@@ -195,6 +198,21 @@ func (d *Debugger) setBreakpoint(addr uint64) {
 
 	fmt.Printf("set breakpoint at address 0x%x\n", addr)
 	d.breakpoints[addr] = bp
+}
+
+func (d *Debugger) setBreakpointAtFunction(funcname string) error {
+	fn, err := d.symTable.LookupFunc(funcname)
+	if err != nil {
+		return err
+	}
+
+	peAddr, err := d.symTable.GetPrologueEndAddress(fn)
+	if err != nil {
+		return err
+	}
+
+	d.setBreakpoint(peAddr)
+	return nil
 }
 
 func (d *Debugger) removeBreakpoint(addr uint64) {
@@ -291,7 +309,8 @@ func (d *Debugger) continueInstruction() error {
 func (d *Debugger) handleBreakCommand(args []string) error {
 	addr, err := strconv.ParseUint(args[0], 16, 64)
 	if err != nil {
-		return err
+		// break by function
+		return d.setBreakpointAtFunction(args[0])
 	}
 
 	d.setBreakpoint(addr)
@@ -358,6 +377,23 @@ func (d *Debugger) handleStepInCommand() error {
 	}
 
 	return d.printSourceCode()
+}
+
+func (d *Debugger) handleNextCommand() error {
+	pc, err := d.getPC()
+	if err != nil {
+		return err
+	}
+
+	fn := d.symTable.PCToFunc(pc)
+
+	_, startLine, _ := d.symTable.PCToLine(fn.Entry)
+	_, endLine, _ := d.symTable.PCToLine(fn.End)
+	_, line, _ := d.symTable.PCToLine(pc)
+
+	fmt.Println(startLine, endLine, line)
+	// TODO: implement next command after implement source level breakpoint
+	return nil
 }
 
 func (d *Debugger) stepIn(filename string, line int) error {

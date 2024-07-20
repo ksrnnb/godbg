@@ -53,20 +53,20 @@ func getOffset(pid int) (uint64, error) {
 	return 0, fmt.Errorf("failed to get offset for pid %d", pid)
 }
 
-func NewDebugger(pid int, debuggeePath string) (Debugger, error) {
+func NewDebugger(pid int, debuggeePath string) (*Debugger, error) {
 	offset, err := getOffset(pid)
 	if err != nil {
-		return Debugger{}, err
+		return nil, err
 	}
 
 	fmt.Printf("offset is %x\n", offset)
 
 	symTable, err := NewSymbolTable(debuggeePath)
 	if err != nil {
-		return Debugger{}, nil
+		return nil, err
 	}
 
-	return Debugger{
+	return &Debugger{
 		pid:            pid,
 		offset:         offset,
 		breakpoints:    make(map[uint64]Breakpoint),
@@ -76,34 +76,7 @@ func NewDebugger(pid int, debuggeePath string) (Debugger, error) {
 	}, nil
 }
 
-func (d *Debugger) Run() error {
-	if _, err := d.waitSignal(); err != nil {
-		return err
-	}
-
-	sc := bufio.NewScanner(os.Stdin)
-	fmt.Print("godbg> ")
-
-	for sc.Scan() {
-		s := sc.Text()
-
-		if err := d.handleInput(s); err != nil {
-			return err
-		}
-
-		fmt.Printf("godbg> ")
-	}
-
-	return nil
-}
-
-func (d *Debugger) handleInput(input string) error {
-	cmd, err := NewCommand(input)
-	if err != nil {
-		fmt.Printf("failed to parse command: %s\n", err)
-		return nil
-	}
-
+func (d *Debugger) HandleCommand(cmd Command) error {
 	switch cmd.Type {
 	case ContinueCommand:
 		if err := d.handleContinueCommand(); err != nil {
@@ -120,7 +93,6 @@ func (d *Debugger) handleInput(input string) error {
 		if err := d.handleRegisterCommand(cmd); err != nil {
 			fmt.Printf("faield to handle register command: %s\n", err)
 		}
-		return nil
 	default:
 		return nil
 	}
@@ -128,7 +100,7 @@ func (d *Debugger) handleInput(input string) error {
 	return nil
 }
 
-func (d *Debugger) waitSignal() (syscall.Signal, error) {
+func (d *Debugger) WaitSignal() (syscall.Signal, error) {
 	var ws sys.WaitStatus
 	_, err := sys.Wait4(d.pid, &ws, 0, nil)
 	if err != nil {
@@ -141,10 +113,12 @@ func (d *Debugger) waitSignal() (syscall.Signal, error) {
 	}
 
 	if ws.Signaled() {
+		fmt.Printf("Process received signal %s\n", ws.Signal())
 		return ws.Signal(), nil
 	}
 
 	if ws.Stopped() {
+		fmt.Printf("Process stopped with signal: %s, cause: %d\n", ws.StopSignal(), ws.TrapCause())
 		if err := d.handleStopSignal(); err != nil {
 			return ws.StopSignal(), err
 		}
@@ -162,6 +136,8 @@ func (d *Debugger) handleStopSignal() error {
 		err := sys.Errno(errno)
 		return fmt.Errorf("failed to get siginfo: %s", err)
 	}
+
+	fmt.Printf("sig code: %d, sig no: %d\n", sigInfo.Code, sigInfo.Signo)
 
 	switch sigInfo.Code {
 	case SignalCodeTrapTrace:
@@ -234,7 +210,7 @@ func (d *Debugger) stepOverBreakpointIfNeeded() error {
 		return err
 	}
 
-	if _, err := d.waitSignal(); err != nil {
+	if _, err := d.WaitSignal(); err != nil {
 		return err
 	}
 
@@ -252,10 +228,10 @@ func (d *Debugger) handleContinueCommand() error {
 
 	if err := syscall.PtraceCont(d.pid, 0); err != nil {
 		fmt.Printf("failed to cont: %s\n", err)
-		return nil
+		return err
 	}
 
-	if sig, err := d.waitSignal(); err != nil {
+	if sig, err := d.WaitSignal(); err != nil {
 		return err
 	} else if sig == syscall.SIGURG {
 		// TODO: investigate why SIGURG is notified.

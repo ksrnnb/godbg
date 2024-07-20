@@ -25,8 +25,9 @@ func main() {
 		log.Fatalf("failed to set up debugger: %s", err)
 	}
 
-	if err := dbg.Run(); err != nil {
-		log.Fatalf("failed to run debugger: %s", err)
+	handler := NewHandler(dbg)
+	if err := handler.Run(); err != nil {
+		log.Fatalf("failed to run handler: %s", err)
 	}
 
 	fmt.Println("process has been completed.")
@@ -57,6 +58,7 @@ func execChildProcess() (pid int, err error) {
 		defer syscall.Syscall(sys.SYS_PERSONALITY, oldPersonality, 0, 0)
 	}
 
+	//	syscall.PtraceSetOptions(pid, syscall.PTRACE_O_TRACECLONE)
 	if err := cmd.Start(); err != nil {
 		log.Fatalf("failed to start command: %s", err)
 	}

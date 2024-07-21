@@ -113,7 +113,7 @@ func (st *SymbolTable) GetPrologueEndAddress(fn *gosym.Func) (uint64, error) {
 }
 
 func (st *SymbolTable) GetNewStatementAddrByLine(filename string, line int) (uint64, error) {
-	addr, _, err := st.table.LineToPC(filename, line)
+	addr, fn, err := st.table.LineToPC(filename, line)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get addr by filename %s and line %d: %s", filename, line, err)
 	}
@@ -134,7 +134,6 @@ func (st *SymbolTable) GetNewStatementAddrByLine(filename string, line int) (uin
 			return 0, err
 		}
 
-		lowPC := entry.AttrField(dwarf.AttrLowpc).Val.(uint64)
 		var lineEntry dwarf.LineEntry
 
 		for {
@@ -147,11 +146,11 @@ func (st *SymbolTable) GetNewStatementAddrByLine(filename string, line int) (uin
 			}
 
 			if lineEntry.Address == addr && lineEntry.IsStmt {
-				if lineEntry.Address != lowPC {
+				if lineEntry.Address != fn.Entry {
 					return lineEntry.Address, nil
 				}
 
-				// if address is low pc, it is not prologue end
+				// if address is func entry, it is not prologue end
 				for err := lineReader.Next(&lineEntry); err == nil; {
 					if lineEntry.PrologueEnd {
 						return lineEntry.Address, nil

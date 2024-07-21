@@ -1,13 +1,13 @@
 package main
 
 import (
-	"bufio"
 	"encoding/binary"
 	"fmt"
+	"log"
+	"log/slog"
 	"os"
-	"regexp"
+	"os/exec"
 	"strconv"
-	"strings"
 	"syscall"
 	"unsafe"
 
@@ -21,6 +21,7 @@ type Debugger struct {
 	registerClient RegisterClient
 	debuggeePath   string
 	symTable       *SymbolTable
+	logger         *slog.Logger
 }
 
 const MainFunctionSymbol = "main.main"
@@ -33,33 +34,11 @@ const (
 	SignalCodeKernel = 0x80
 )
 
-var mainReg = regexp.MustCompile(`^<([^>]+)>:$`)
-
-func getOffset(pid int) (uint64, error) {
-	filePath := fmt.Sprintf("/proc/%d/maps", pid)
-	file, err := os.Open(filePath)
-	if err != nil {
-		return 0, err
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	if scanner.Scan() {
-		line := scanner.Text()
-		s := strings.Split(line, "-")
-		return strconv.ParseUint(s[0], 16, 64)
-	}
-
-	return 0, fmt.Errorf("failed to get offset for pid %d", pid)
-}
-
-func NewDebugger(pid int, debuggeePath string) (*Debugger, error) {
-	offset, err := getOffset(pid)
+func NewDebugger(debuggeePath string, logger *slog.Logger) (*Debugger, error) {
+	pid, err := executeDebuggeeProcess()
 	if err != nil {
 		return nil, err
 	}
-
-	fmt.Printf("offset is %x\n", offset)
 
 	symTable, err := NewSymbolTable(debuggeePath)
 	if err != nil {
@@ -68,11 +47,11 @@ func NewDebugger(pid int, debuggeePath string) (*Debugger, error) {
 
 	return &Debugger{
 		pid:            pid,
-		offset:         offset,
 		breakpoints:    make(map[uint64]Breakpoint),
 		registerClient: NewRegisterClient(pid),
 		debuggeePath:   debuggeePath,
 		symTable:       symTable,
+		logger:         logger,
 	}, nil
 }
 
@@ -129,12 +108,12 @@ func (d *Debugger) WaitSignal() (syscall.Signal, error) {
 	}
 
 	if ws.Signaled() {
-		fmt.Printf("Process received signal %s\n", ws.Signal())
+		d.logger.Debug("Process received signal", "signal", ws.Signal())
 		return ws.Signal(), nil
 	}
 
 	if ws.Stopped() {
-		fmt.Printf("Process stopped with signal: %s, cause: %d\n", ws.StopSignal(), ws.TrapCause())
+		d.logger.Debug("Process stopped with sigal", "signal", ws.StopSignal(), "cause", ws.TrapCause())
 		if err := d.handleStopSignal(); err != nil {
 			return ws.StopSignal(), err
 		}
@@ -153,7 +132,7 @@ func (d *Debugger) handleStopSignal() error {
 		return fmt.Errorf("failed to get siginfo: %s", err)
 	}
 
-	fmt.Printf("sig code: %d, sig no: %d\n", sigInfo.Code, sigInfo.Signo)
+	d.logger.Debug("stop by signal", "number", sigInfo.Signo, "code", sigInfo.Code)
 
 	switch sigInfo.Code {
 	case SignalCodeTrapTrace:
@@ -179,7 +158,7 @@ func (d *Debugger) handleHitBreakpoint() error {
 		return err
 	}
 
-	fmt.Printf("hit breakpoint at address 0x%x\n", newPC)
+	fmt.Printf("hit breakpoint at address: 0x%x\n", newPC)
 
 	return d.printSourceCode()
 }
@@ -196,7 +175,7 @@ func (d *Debugger) setBreakpoint(addr uint64) {
 	bp := NewBreakpoint(d.pid, addr)
 	bp.Enable()
 
-	fmt.Printf("set breakpoint at address 0x%x\n", addr)
+	fmt.Printf("set breakpoint at address: 0x%x\n", addr)
 	d.breakpoints[addr] = bp
 }
 
@@ -264,12 +243,12 @@ func (d *Debugger) stepOverBreakpointIfNeeded() error {
 
 	bp, ok := d.breakpoints[pc]
 	if !ok {
-		fmt.Printf("break point is not found at %x\n", pc)
+		d.logger.Debug("break point is not found", "address", fmt.Sprintf("0x%x", pc))
 		return nil
 	}
 
 	if !bp.isEnabled {
-		fmt.Printf("break point is not enabled at %x\n", pc)
+		d.logger.Debug("break point is not enabled", "address", fmt.Sprintf("0x%x", pc))
 		return nil
 	}
 
@@ -303,7 +282,7 @@ func (d *Debugger) continueInstruction() error {
 	}
 
 	if err := syscall.PtraceCont(d.pid, 0); err != nil {
-		fmt.Printf("failed to cont: %s\n", err)
+		d.logger.Error("failed to cont", "error", err)
 		return err
 	}
 
@@ -459,4 +438,37 @@ func (d *Debugger) printSourceCode() error {
 	printSourceCode(f, line)
 
 	return nil
+}
+
+func executeDebuggeeProcess() (pid int, err error) {
+	cmd := exec.Command(debuggee)
+
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Ptrace: true,
+	}
+
+	// set personality not to randomize address
+	// this code is based on delve(https://github.com/go-delve/delve/tree/v1.22.1).
+	// Copyright (c) 2014 Derek Parker
+	// MIT LICENSE: https://github.com/go-delve/delve/blob/v1.22.1/LICENSE
+	var personalityGetPersonality uintptr = 0xffffffff // argument to pass to personality syscall to get the current personality
+	var _ADDR_NO_RANDOMIZE uintptr = 0x0040000         // ADDR_NO_RANDOMIZE linux constant
+
+	oldPersonality, _, err := syscall.Syscall(sys.SYS_PERSONALITY, personalityGetPersonality, 0, 0)
+	if err == syscall.Errno(0) {
+		newPersonality := oldPersonality | _ADDR_NO_RANDOMIZE
+		syscall.Syscall(sys.SYS_PERSONALITY, newPersonality, 0, 0)
+		defer syscall.Syscall(sys.SYS_PERSONALITY, oldPersonality, 0, 0)
+	}
+
+	//	syscall.PtraceSetOptions(pid, syscall.PTRACE_O_TRACECLONE)
+	if err := cmd.Start(); err != nil {
+		log.Fatalf("failed to start command: %s", err)
+	}
+
+	return cmd.Process.Pid, nil
 }

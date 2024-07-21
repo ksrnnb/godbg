@@ -111,3 +111,55 @@ func (st *SymbolTable) GetPrologueEndAddress(fn *gosym.Func) (uint64, error) {
 
 	return 0, fmt.Errorf("faield to get prologue end address for function %s", fn.Name)
 }
+
+func (st *SymbolTable) GetNewStatementAddrByLine(filename string, line int) (uint64, error) {
+	addr, _, err := st.table.LineToPC(filename, line)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get addr by filename %s and line %d: %s", filename, line, err)
+	}
+
+	reader := st.dwarfData.Reader()
+	for {
+		entry, err := reader.Next()
+		if err != nil {
+			break
+		}
+
+		if entry.Tag != dwarf.TagCompileUnit {
+			continue
+		}
+
+		lineReader, err := st.dwarfData.LineReader(entry)
+		if err != nil {
+			return 0, err
+		}
+
+		lowPC := entry.AttrField(dwarf.AttrLowpc).Val.(uint64)
+		var lineEntry dwarf.LineEntry
+
+		for {
+			if err := lineReader.Next(&lineEntry); err != nil {
+				break
+			}
+
+			if lineEntry.File.Name != filename {
+				continue
+			}
+
+			if lineEntry.Address == addr && lineEntry.IsStmt {
+				if lineEntry.Address != lowPC {
+					return lineEntry.Address, nil
+				}
+
+				// if address is low pc, it is not prologue end
+				for err := lineReader.Next(&lineEntry); err == nil; {
+					if lineEntry.PrologueEnd {
+						return lineEntry.Address, nil
+					}
+				}
+			}
+		}
+	}
+
+	return 0, fmt.Errorf("failed to get NS addr for file %s and line %d", filename, line)
+}

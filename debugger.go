@@ -215,6 +215,17 @@ func (d *Debugger) setBreakpointAtFunction(funcname string) error {
 	return nil
 }
 
+func (d *Debugger) setBreakpointAtLine(filename string, line int) error {
+	addr, err := d.symTable.GetNewStatementAddrByLine(filename, line)
+	if err != nil {
+		return err
+	}
+
+	d.setBreakpoint(addr)
+
+	return nil
+}
+
 func (d *Debugger) removeBreakpoint(addr uint64) {
 	bp, ok := d.breakpoints[addr]
 	if ok {
@@ -309,6 +320,16 @@ func (d *Debugger) continueInstruction() error {
 func (d *Debugger) handleBreakCommand(args []string) error {
 	addr, err := strconv.ParseUint(args[0], 16, 64)
 	if err != nil {
+		// break with filename and line number when the length of arguments is 2
+		if len(args) == 2 {
+			line, err := strconv.Atoi(args[1])
+			if err != nil {
+				return fmt.Errorf("line number must be number: %s", err)
+			}
+
+			return d.setBreakpointAtLine(args[0], line)
+		}
+
 		// break by function
 		return d.setBreakpointAtFunction(args[0])
 	}

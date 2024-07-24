@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"syscall"
 	"unsafe"
@@ -17,7 +18,7 @@ import (
 type Debugger struct {
 	pid            int
 	offset         uint64
-	breakpoints    map[uint64]Breakpoint
+	breakpoints    map[uint64]*Breakpoint
 	registerClient RegisterClient
 	debuggeePath   string
 	symTable       *SymbolTable
@@ -40,6 +41,10 @@ func NewDebugger(debuggeePath string, logger *slog.Logger) (*Debugger, error) {
 		return nil, err
 	}
 
+	// SIGURG is used to switch go routine but it can be ignored.
+	// https://go.googlesource.com/proposal/+/master/design/24543-non-cooperative-preemption.md
+	signal.Ignore(sys.SIGURG)
+
 	symTable, err := NewSymbolTable(debuggeePath)
 	if err != nil {
 		return nil, err
@@ -47,7 +52,7 @@ func NewDebugger(debuggeePath string, logger *slog.Logger) (*Debugger, error) {
 
 	return &Debugger{
 		pid:            pid,
-		breakpoints:    make(map[uint64]Breakpoint),
+		breakpoints:    make(map[uint64]*Breakpoint),
 		registerClient: NewRegisterClient(pid),
 		debuggeePath:   debuggeePath,
 		symTable:       symTable,
@@ -153,6 +158,7 @@ func (d *Debugger) handleHitBreakpoint() error {
 		return err
 	}
 
+	// when INT3 instruction is executed, pc is icremented 1.
 	newPC := pc - 1
 	if err := d.setPC(newPC); err != nil {
 		return err
@@ -247,7 +253,7 @@ func (d *Debugger) stepOverBreakpointIfNeeded() error {
 		return nil
 	}
 
-	if !bp.isEnabled {
+	if !bp.IsEnabled() {
 		d.logger.Debug("break point is not enabled", "address", fmt.Sprintf("0x%x", pc))
 		return nil
 	}
@@ -286,11 +292,8 @@ func (d *Debugger) continueInstruction() error {
 		return err
 	}
 
-	if sig, err := d.WaitSignal(); err != nil {
+	if _, err := d.WaitSignal(); err != nil {
 		return err
-	} else if sig == syscall.SIGURG {
-		// TODO: investigate why SIGURG is notified.
-		return d.continueInstruction()
 	}
 
 	return nil
@@ -385,14 +388,64 @@ func (d *Debugger) handleNextCommand() error {
 		return err
 	}
 
-	fn := d.symTable.PCToFunc(pc)
+	startLine, endLine, err := d.symTable.GetCurrentFuncStartToEndLine(pc)
+	if err != nil {
+		return err
+	}
 
-	_, startLine, _ := d.symTable.PCToLine(fn.Entry)
-	_, endLine, _ := d.symTable.PCToLine(fn.End)
-	_, line, _ := d.symTable.PCToLine(pc)
+	filename, currentLine, _ := d.symTable.PCToLine(pc)
 
-	fmt.Println(startLine, endLine, line)
-	// TODO: implement next command after implement source level breakpoint
+	fmt.Printf("start line %d, end line: %d, current line: %d\n", startLine, endLine, currentLine)
+
+	var deletingBreakpointAddresses []uint64
+	for l := startLine; l <= endLine; l++ {
+		if l == currentLine {
+			continue
+		}
+
+		addr, err := d.symTable.GetNewStatementAddrByLine(filename, l)
+		if err != nil {
+			continue
+		}
+
+		fmt.Printf("file %s, line %d address is %0x\n", filename, l, addr)
+
+		_, ok := d.breakpoints[addr]
+		if ok {
+			continue
+		}
+
+		d.setBreakpoint(addr)
+		deletingBreakpointAddresses = append(deletingBreakpointAddresses, addr)
+	}
+
+	rbp, err := d.registerClient.GetRegisterValue(Rbp)
+	if err != nil {
+		return err
+	}
+
+	returnAddr, err := d.readMemory(rbp)
+	if err != nil {
+		return err
+	}
+
+	// returnAddr of main.main will be 0
+	if returnAddr != 0 {
+		_, ok := d.breakpoints[returnAddr]
+		if !ok {
+			d.setBreakpoint(returnAddr)
+			deletingBreakpointAddresses = append(deletingBreakpointAddresses, returnAddr)
+		}
+	}
+
+	if err := d.continueInstruction(); err != nil {
+		return err
+	}
+
+	for _, addr := range deletingBreakpointAddresses {
+		d.removeBreakpoint(addr)
+	}
+
 	return nil
 }
 

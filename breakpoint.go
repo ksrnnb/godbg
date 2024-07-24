@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"fmt"
 
 	sys "golang.org/x/sys/unix"
 )
@@ -15,8 +16,8 @@ type Breakpoint struct {
 	isEnabled           bool
 }
 
-func NewBreakpoint(pid int, addr uint64) Breakpoint {
-	return Breakpoint{pid: pid, addr: uintptr(addr), originalInstruction: make([]byte, 8)}
+func NewBreakpoint(pid int, addr uint64) *Breakpoint {
+	return &Breakpoint{pid: pid, addr: uintptr(addr), originalInstruction: make([]byte, 8)}
 }
 
 func (bp *Breakpoint) Enable() error {
@@ -36,11 +37,15 @@ func (bp *Breakpoint) Enable() error {
 		return err
 	}
 
+	fmt.Printf("new Data is %0x\n", newData)
+
 	bp.isEnabled = true
 	return nil
 }
 
 func (bp *Breakpoint) Disable() error {
+	originalData := binary.LittleEndian.Uint64(bp.originalInstruction)
+	fmt.Printf("original data is %0x\n", originalData)
 	_, err := sys.PtracePokeData(bp.pid, bp.addr, bp.originalInstruction)
 	if err != nil {
 		return err
@@ -48,4 +53,8 @@ func (bp *Breakpoint) Disable() error {
 
 	bp.isEnabled = false
 	return nil
+}
+
+func (bp *Breakpoint) IsEnabled() bool {
+	return bp.isEnabled
 }

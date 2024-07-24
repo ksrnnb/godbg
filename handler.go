@@ -10,11 +10,11 @@ type Handler struct {
 	d *Debugger
 }
 
-func NewHandler(d *Debugger) Handler {
-	return Handler{d: d}
+func NewHandler(d *Debugger) *Handler {
+	return &Handler{d: d}
 }
 
-func (h Handler) Run() error {
+func (h *Handler) Run() error {
 	if _, err := h.d.WaitSignal(); err != nil {
 		return err
 	}

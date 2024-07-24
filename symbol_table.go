@@ -6,6 +6,7 @@ import (
 	"debug/gosym"
 	"errors"
 	"fmt"
+	"math"
 )
 
 type SymbolTable struct {
@@ -161,4 +162,95 @@ func (st *SymbolTable) GetNewStatementAddrByLine(filename string, line int) (uin
 	}
 
 	return 0, fmt.Errorf("failed to get NS addr for file %s and line %d", filename, line)
+}
+
+func (st *SymbolTable) GetCurrentFuncLowPCAndHighPC(pc uint64) (lowPC uint64, highPC uint64, err error) {
+	reader := st.dwarfData.Reader()
+	for {
+		entry, err := reader.Next()
+		if err != nil {
+			break
+		}
+
+		if entry == nil {
+			break
+		}
+
+		if entry.Tag != dwarf.TagSubprogram {
+			continue
+		}
+
+		lowPC, _ = entry.Val(dwarf.AttrLowpc).(uint64)
+		highPC, _ = entry.Val(dwarf.AttrHighpc).(uint64)
+
+		if pc >= lowPC && pc <= highPC {
+			return lowPC, highPC, nil
+		}
+	}
+
+	return 0, 0, nil
+}
+
+func (st *SymbolTable) GetCurrentFuncStartToEndLine(pc uint64) (startLine int, endLine int, err error) {
+	filename, _, _ := st.PCToLine(pc)
+	lowPC, highPC, err := st.GetCurrentFuncLowPCAndHighPC(pc)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	reader := st.dwarfData.Reader()
+	for {
+		entry, err := reader.Next()
+		if err != nil {
+			break
+		}
+
+		if entry == nil {
+			break
+		}
+
+		if entry.Tag != dwarf.TagCompileUnit {
+			continue
+		}
+
+		lineReader, err := st.dwarfData.LineReader(entry)
+		if err != nil {
+			return 0, 0, err
+		}
+
+		var lineEntry dwarf.LineEntry
+
+		startLine = math.MaxInt
+		endLine = -1
+
+		for {
+			if err := lineReader.Next(&lineEntry); err != nil {
+				break
+			}
+
+			if lineEntry.File.Name != filename {
+				continue
+			}
+
+			if !lineEntry.IsStmt {
+				continue
+			}
+
+			if lineEntry.Address >= lowPC && lineEntry.Address <= highPC {
+				if lineEntry.Line < startLine {
+					startLine = lineEntry.Line
+				}
+
+				if lineEntry.Line > endLine {
+					endLine = lineEntry.Line
+				}
+			}
+		}
+
+		if startLine != math.MaxInt {
+			return startLine, endLine, nil
+		}
+	}
+
+	return 0, 0, fmt.Errorf("failed to find start line and end line for pc %0x", pc)
 }

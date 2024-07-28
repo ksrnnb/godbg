@@ -10,8 +10,9 @@ import (
 )
 
 type SymbolTable struct {
-	table     *gosym.Table
-	dwarfData *dwarf.Data
+	table            *gosym.Table
+	dwarfData        *dwarf.Data
+	runtimeETextAddr uint64
 }
 
 // section is described in the elf format document.
@@ -25,6 +26,14 @@ func NewSymbolTable(debugeePath string) (*SymbolTable, error) {
 		return nil, err
 	}
 	defer f.Close()
+
+	var runtimeETextAddr uint64
+	symbols, _ := f.Symbols()
+	for _, s := range symbols {
+		if s.Name == "runtime.etext" {
+			runtimeETextAddr = s.Value
+		}
+	}
 
 	s := f.Section(".gosymtab")
 	if s == nil {
@@ -44,6 +53,7 @@ func NewSymbolTable(debugeePath string) (*SymbolTable, error) {
 	pcln := gosym.NewLineTable(pclndata, f.Section(".text").Addr)
 
 	table, err := gosym.NewTable(symdata, pcln)
+
 	if err != nil {
 		return nil, err
 	}
@@ -54,8 +64,9 @@ func NewSymbolTable(debugeePath string) (*SymbolTable, error) {
 	}
 
 	return &SymbolTable{
-		table:     table,
-		dwarfData: dwarfData,
+		table:            table,
+		dwarfData:        dwarfData,
+		runtimeETextAddr: runtimeETextAddr,
 	}, nil
 }
 
@@ -253,4 +264,8 @@ func (st *SymbolTable) GetCurrentFuncStartToEndLine(pc uint64) (startLine int, e
 	}
 
 	return 0, 0, fmt.Errorf("failed to find start line and end line for pc %0x", pc)
+}
+
+func (st *SymbolTable) GetRuntimeETextAddress() uint64 {
+	return st.runtimeETextAddr
 }

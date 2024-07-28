@@ -267,10 +267,18 @@ func (d *Debugger) stepOverBreakpointIfNeeded() error {
 		return err
 	}
 
+	fmt.Println("single step is executed")
+
 	if _, err := d.WaitSignal(); err != nil {
 		return err
 	}
 
+	newPC, err := d.getPC()
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("prev pc: %d, new pc: %d\n", pc, newPC)
 	if err := bp.Enable(); err != nil {
 		return err
 	}
@@ -429,10 +437,12 @@ func (d *Debugger) handleNextCommand() error {
 		return err
 	}
 
-	// returnAddr of main.main will be 0
-	if returnAddr != 0 {
+	etextAddr := d.symTable.GetRuntimeETextAddress()
+
+	if returnAddr != 0 && returnAddr <= etextAddr {
 		_, ok := d.breakpoints[returnAddr]
 		if !ok {
+			fmt.Printf("set breakpoint at RBP (return address) %x\n", returnAddr)
 			d.setBreakpoint(returnAddr)
 			deletingBreakpointAddresses = append(deletingBreakpointAddresses, returnAddr)
 		}

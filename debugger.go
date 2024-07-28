@@ -263,22 +263,39 @@ func (d *Debugger) stepOverBreakpointIfNeeded() error {
 		return err
 	}
 
-	if err := sys.PtraceSingleStep(d.pid); err != nil {
-		return err
+	sig := 0
+	for {
+		err := ptraceSingleStep(d.pid, sig)
+		if err != nil {
+			return err
+		}
+
+		s, err := d.WaitSignal()
+		if err != nil {
+			return err
+		}
+
+		willBreak := false
+		switch s {
+		case sys.SIGTRAP:
+			willBreak = true
+		case sys.SIGILL, sys.SIGBUS, sys.SIGFPE, sys.SIGSEGV, sys.SIGSTKFLT:
+			sig = int(s)
+		}
+
+		if willBreak {
+			break
+		}
 	}
 
 	fmt.Println("single step is executed")
-
-	if _, err := d.WaitSignal(); err != nil {
-		return err
-	}
 
 	newPC, err := d.getPC()
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("prev pc: %d, new pc: %d\n", pc, newPC)
+	fmt.Printf("prev pc: %x, new pc: %x\n", pc, newPC)
 	if err := bp.Enable(); err != nil {
 		return err
 	}
@@ -293,6 +310,18 @@ func (d *Debugger) handleContinueCommand() error {
 func (d *Debugger) continueInstruction() error {
 	if err := d.stepOverBreakpointIfNeeded(); err != nil {
 		return err
+	}
+
+	pc, err := d.getPC()
+	if err != nil {
+		return err
+	}
+
+	// if breakpoint is hit after step over breakpoint, it doesn't exec ptrace cont
+	_, ok := d.breakpoints[pc]
+	if ok {
+		d.printSourceCode()
+		return nil
 	}
 
 	if err := syscall.PtraceCont(d.pid, 0); err != nil {

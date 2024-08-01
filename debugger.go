@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"os/signal"
+	"runtime"
 	"strconv"
 	"syscall"
 	"unsafe"
@@ -43,7 +43,7 @@ func NewDebugger(debuggeePath string, logger *slog.Logger) (*Debugger, error) {
 
 	// SIGURG is used to switch go routine but it can be ignored.
 	// https://go.googlesource.com/proposal/+/master/design/24543-non-cooperative-preemption.md
-	signal.Ignore(sys.SIGURG)
+	// signal.Ignore(sys.SIGURG)
 
 	symTable, err := NewSymbolTable(debuggeePath)
 	if err != nil {
@@ -102,7 +102,7 @@ func (d *Debugger) HandleCommand(cmd Command) error {
 
 func (d *Debugger) WaitSignal() (syscall.Signal, error) {
 	var ws sys.WaitStatus
-	_, err := sys.Wait4(d.pid, &ws, 0, nil)
+	_, err := sys.Wait4(d.pid, &ws, sys.WALL, nil)
 	if err != nil {
 		return 0, fmt.Errorf("failed to wait pid %d", d.pid)
 	}
@@ -478,7 +478,7 @@ func (d *Debugger) handleNextCommand() error {
 	}
 
 	if err := d.continueInstruction(); err != nil {
-		return err
+		return fmt.Errorf("failed to continue in next %s", err)
 	}
 
 	for _, addr := range deletingBreakpointAddresses {
@@ -507,7 +507,7 @@ func (d *Debugger) readMemory(addr uint64) (uint64, error) {
 	data := make([]byte, 8)
 	_, err := sys.PtracePeekData(d.pid, uintptr(addr), data)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to readMemory: %s", err)
 	}
 
 	return binary.LittleEndian.Uint64(data), nil
@@ -533,6 +533,8 @@ func (d *Debugger) printSourceCode() error {
 }
 
 func executeDebuggeeProcess() (pid int, err error) {
+	runtime.LockOSThread()
+
 	cmd := exec.Command(debuggee)
 
 	cmd.Stdin = os.Stdin
@@ -557,7 +559,6 @@ func executeDebuggeeProcess() (pid int, err error) {
 		defer syscall.Syscall(sys.SYS_PERSONALITY, oldPersonality, 0, 0)
 	}
 
-	//	syscall.PtraceSetOptions(pid, syscall.PTRACE_O_TRACECLONE)
 	if err := cmd.Start(); err != nil {
 		log.Fatalf("failed to start command: %s", err)
 	}

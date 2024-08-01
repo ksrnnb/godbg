@@ -51,7 +51,7 @@ func NewRegisterClient(pid int) RegisterClient {
 func (c RegisterClient) GetRegisterValue(register Register) (uint64, error) {
 	regs := &sys.PtraceRegs{}
 	if err := sys.PtraceGetRegs(c.pid, regs); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to get register values for %s and pid %d: %s", register, c.pid, err)
 	}
 
 	v := reflect.ValueOf(regs).Elem()

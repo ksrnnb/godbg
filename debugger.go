@@ -36,16 +36,17 @@ const (
 )
 
 func NewDebugger(debuggeePath string, logger *slog.Logger) (*Debugger, error) {
-	pid, err := executeDebuggeeProcess()
+	target, err := buildDebuggeeProgram(debuggeePath)
 	if err != nil {
 		return nil, err
 	}
 
-	// SIGURG is used to switch go routine but it can be ignored.
-	// https://go.googlesource.com/proposal/+/master/design/24543-non-cooperative-preemption.md
-	// signal.Ignore(sys.SIGURG)
+	pid, err := executeDebuggeeProcess(target)
+	if err != nil {
+		return nil, err
+	}
 
-	symTable, err := NewSymbolTable(debuggeePath)
+	symTable, err := NewSymbolTable(target)
 	if err != nil {
 		return nil, err
 	}
@@ -532,11 +533,11 @@ func (d *Debugger) printSourceCode() error {
 	return nil
 }
 
-func executeDebuggeeProcess() (pid int, err error) {
+func executeDebuggeeProcess(debuggeePath string) (pid int, err error) {
+	// lock os thread prevent go runtime changes thread id
 	runtime.LockOSThread()
 
-	cmd := exec.Command(debuggee)
-
+	cmd := exec.Command(debuggeePath)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

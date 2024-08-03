@@ -16,13 +16,14 @@ import (
 )
 
 type Debugger struct {
-	pid            int
-	offset         uint64
-	breakpoints    map[uint64]*Breakpoint
-	registerClient RegisterClient
-	debuggeePath   string
-	symTable       *SymbolTable
-	logger         *slog.Logger
+	pid               int
+	offset            uint64
+	breakpoints       map[uint64]*Breakpoint
+	registerClient    RegisterClient
+	debuggeePath      string
+	symTable          *SymbolTable
+	logger            *slog.Logger
+	debugeeBinaryPath string
 }
 
 const MainFunctionSymbol = "main.main"
@@ -52,12 +53,13 @@ func NewDebugger(debuggeePath string, logger *slog.Logger) (*Debugger, error) {
 	}
 
 	return &Debugger{
-		pid:            pid,
-		breakpoints:    make(map[uint64]*Breakpoint),
-		registerClient: NewRegisterClient(pid),
-		debuggeePath:   debuggeePath,
-		symTable:       symTable,
-		logger:         logger,
+		pid:               pid,
+		breakpoints:       make(map[uint64]*Breakpoint),
+		registerClient:    NewRegisterClient(pid),
+		debuggeePath:      debuggeePath,
+		symTable:          symTable,
+		logger:            logger,
+		debugeeBinaryPath: target,
 	}, nil
 }
 
@@ -68,8 +70,9 @@ func (d *Debugger) HandleCommand(cmd Command) error {
 			return err
 		}
 	case QuitCommand:
-		fmt.Println("quit process")
-		os.Exit(0)
+		if err := d.handleQuitCommand(); err != nil {
+			return err
+		}
 	case BreakCommand:
 		if err := d.handleBreakCommand(cmd.Args); err != nil {
 			fmt.Printf("failed to handle break command: %s\n", err)
@@ -485,6 +488,23 @@ func (d *Debugger) handleNextCommand() error {
 	for _, addr := range deletingBreakpointAddresses {
 		d.removeBreakpoint(addr)
 	}
+
+	return nil
+}
+
+func (d *Debugger) handleQuitCommand() error {
+	for _, bp := range d.breakpoints {
+		if err := bp.Disable(); err != nil {
+			return fmt.Errorf("failed to clean up breakpoints: %s", err)
+		}
+
+	}
+
+	if err := syscall.PtraceDetach(d.pid); err != nil {
+		return err
+	}
+
+	os.Exit(0)
 
 	return nil
 }

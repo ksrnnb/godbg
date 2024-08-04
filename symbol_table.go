@@ -266,6 +266,12 @@ func (st *SymbolTable) GetCurrentFuncStartToEndLine(pc uint64) (startLine int, e
 	return 0, 0, fmt.Errorf("failed to find start line and end line for pc %0x", pc)
 }
 
+func (st *SymbolTable) GetFuncInfo(pc uint64) (funcName string, filename string, line int) {
+	filename, line, fn := st.table.PCToLine(pc)
+
+	return fn.Name, filename, line
+}
+
 func (st *SymbolTable) GetRuntimeETextAddress() uint64 {
 	return st.runtimeETextAddr
 }

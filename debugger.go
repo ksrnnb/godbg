@@ -63,6 +63,7 @@ func NewDebugger(debuggeePath string, logger *slog.Logger) (*Debugger, error) {
 	}, nil
 }
 
+// TODO: stragety pattern
 func (d *Debugger) HandleCommand(cmd Command) error {
 	switch cmd.Type {
 	case ContinueCommand:
@@ -97,6 +98,10 @@ func (d *Debugger) HandleCommand(cmd Command) error {
 	case NextCommand:
 		if err := d.handleNextCommand(); err != nil {
 			fmt.Printf("failed to handle next command: %s\n", err)
+		}
+	case BackTraceCommand:
+		if err := d.handleBacktraceCommand(); err != nil {
+			fmt.Printf("failed to handle backtrace command: %s\n", err)
 		}
 	default:
 		return nil
@@ -492,6 +497,54 @@ func (d *Debugger) handleNextCommand() error {
 
 	for _, addr := range deletingBreakpointAddresses {
 		d.removeBreakpoint(addr)
+	}
+
+	return nil
+}
+
+func (d *Debugger) handleBacktraceCommand() error {
+	frameNumber := 1
+	output := func(pc uint64) {
+		funcname, filename, line := d.symTable.GetFuncInfo(pc)
+		fmt.Printf("frame#%d\t0x%x\t%s\t%s:%d\n", frameNumber, pc, funcname, filename, line)
+		frameNumber++
+	}
+
+	currentPC, err := d.getPC()
+	if err != nil {
+		return err
+	}
+
+	output(currentPC)
+
+	framePointer, err := d.registerClient.GetRegisterValue(Rbp)
+	if err != nil {
+		return err
+	}
+
+	returnAddress, err := d.readMemory(framePointer + 8)
+	if err != nil {
+		return err
+	}
+
+	for {
+		funcname, _, _ := d.symTable.GetFuncInfo(currentPC)
+		if funcname == MainFunctionSymbol {
+			break
+		}
+
+		currentPC = returnAddress
+		output(currentPC)
+
+		framePointer, err = d.readMemory(framePointer)
+		if err != nil {
+			return fmt.Errorf("faield to get frame pointer: %s", err)
+		}
+
+		returnAddress, err = d.readMemory(framePointer + 8)
+		if err != nil {
+			return fmt.Errorf("faield to get return address: %s", err)
+		}
 	}
 
 	return nil

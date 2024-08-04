@@ -16,6 +16,7 @@ const (
 	StepInCommand                = "stepin"
 	NextCommand                  = "next"
 	StepOutCommand               = "stepout"
+	BackTraceCommand             = "backtrace"
 	UnknownCommand               = "unknown"
 )
 
@@ -74,6 +75,10 @@ func NewCommand(input string) (Command, error) {
 
 	if strings.HasPrefix(NextCommand, s[0]) {
 		return Command{Type: NextCommand}, nil
+	}
+
+	if strings.HasPrefix(BackTraceCommand, s[0]) {
+		return Command{Type: BackTraceCommand}, nil
 	}
 
 	return Command{Type: UnknownCommand}, nil

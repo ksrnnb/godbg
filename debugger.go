@@ -67,10 +67,11 @@ func (d *Debugger) HandleCommand(cmd Command) error {
 	switch cmd.Type {
 	case ContinueCommand:
 		if err := d.handleContinueCommand(); err != nil {
-			return err
+			fmt.Printf("failed to continue: %s\n", err)
+			return d.quit()
 		}
 	case QuitCommand:
-		if err := d.handleQuitCommand(); err != nil {
+		if err := d.quit(); err != nil {
 			return err
 		}
 	case BreakCommand:
@@ -112,6 +113,10 @@ func (d *Debugger) WaitSignal() (syscall.Signal, error) {
 	}
 
 	if ws.Exited() {
+		if err := d.quit(); err != nil {
+			fmt.Printf("failed to handle quit: %s\n", err)
+		}
+
 		fmt.Println("process exited")
 		os.Exit(0)
 	}
@@ -492,17 +497,20 @@ func (d *Debugger) handleNextCommand() error {
 	return nil
 }
 
-func (d *Debugger) handleQuitCommand() error {
-	for _, bp := range d.breakpoints {
-		if err := bp.Disable(); err != nil {
-			return fmt.Errorf("failed to clean up breakpoints: %s", err)
-		}
-
-	}
-
-	if err := syscall.PtraceDetach(d.pid); err != nil {
+func (d *Debugger) quit() error {
+	if err := os.Remove(d.debugeeBinaryPath); err != nil {
 		return err
 	}
+
+	for _, bp := range d.breakpoints {
+		if err := bp.Disable(); err != nil {
+			// if failed to disable breakpoint, child process already completed.
+			break
+		}
+	}
+
+	// ignore error because if failed to detach, child process already completed.
+	syscall.PtraceDetach(d.pid)
 
 	os.Exit(0)
 

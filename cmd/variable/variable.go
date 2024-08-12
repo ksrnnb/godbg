@@ -3,10 +3,11 @@ package main
 import "fmt"
 
 func main() {
-	a := 1
-	b := 2
-	c := a + b
+	foo := -3
+	bar := 2
+	baz := foo + bar
 
-	a = 4
-	fmt.Printf("a: %d, b: %d, c: %d\n", a, b, c)
+	foo = 4
+
+	fmt.Printf("foo: %d, bar: %d, baz: %d\n", foo, bar, baz)
 }

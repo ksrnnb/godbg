@@ -103,6 +103,10 @@ func (d *Debugger) HandleCommand(cmd Command) error {
 		if err := d.handleBacktraceCommand(); err != nil {
 			fmt.Printf("failed to handle backtrace command: %s\n", err)
 		}
+	case VariablesCommand:
+		if err := d.handleVariableCommand(); err != nil {
+			fmt.Printf("failed to handle backtrace command: %s\n", err)
+		}
 	default:
 		return nil
 	}
@@ -397,6 +401,7 @@ func (d *Debugger) handleStepOutCommand() error {
 		return fmt.Errorf("faield to read register in step out command: %s", err)
 	}
 
+	// TODO: use CFA to get return address
 	returnAddress, err := d.readMemory(rbp + 8)
 	if err != nil {
 		return err
@@ -527,6 +532,8 @@ func (d *Debugger) handleBacktraceCommand() error {
 		return err
 	}
 
+	// TODO: back trace has some bugs
+	//       some function isn't show in backtrace...
 	for {
 		funcname, _, _ := d.symTable.GetFuncInfo(currentPC)
 		if funcname == MainFunctionSymbol {
@@ -545,6 +552,36 @@ func (d *Debugger) handleBacktraceCommand() error {
 		if err != nil {
 			return fmt.Errorf("faield to get return address: %s", err)
 		}
+	}
+
+	return nil
+}
+
+func (d *Debugger) handleVariableCommand() error {
+	pc, err := d.getPC()
+	if err != nil {
+		return err
+	}
+
+	rsp, err := d.registerClient.GetRegisterValue(Rsp)
+	if err != nil {
+		return err
+	}
+
+	variables, err := d.symTable.GetVariables(pc, rsp)
+	if err != nil {
+		return err
+	}
+
+	for _, variable := range variables {
+		// TODO: use CFA
+		// addr := int64(rsp) + 184 + variable.Offset
+		v, err := d.readInt(variable.Address)
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("variable %s: %v\n", variable.Name, v)
 	}
 
 	return nil
@@ -593,6 +630,17 @@ func (d *Debugger) readMemory(addr uint64) (uint64, error) {
 	}
 
 	return binary.LittleEndian.Uint64(data), nil
+}
+
+func (d *Debugger) readInt(addr uint64) (int, error) {
+	// data is 8 byte to store uint64 value
+	data := make([]byte, 8)
+	_, err := sys.PtracePeekData(d.pid, uintptr(addr), data)
+	if err != nil {
+		return 0, fmt.Errorf("failed to readMemory: %s", err)
+	}
+
+	return int(binary.LittleEndian.Uint64(data)), nil
 }
 
 func (d *Debugger) printSourceCode() error {

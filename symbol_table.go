@@ -7,12 +7,23 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
+
+	"github.com/ksrnnb/godbg/frame"
 )
 
 type SymbolTable struct {
 	table            *gosym.Table
 	dwarfData        *dwarf.Data
 	runtimeETextAddr uint64
+	frameEntries     frame.FrameDescriptionEntries
+}
+
+type Variable struct {
+	Offset  int64
+	Address uint64
+	Name    string
+	Type    string
 }
 
 // section is described in the elf format document.
@@ -63,10 +74,21 @@ func NewSymbolTable(debugeePath string) (*SymbolTable, error) {
 		return nil, err
 	}
 
+	frameSection := f.Section(".debug_frame")
+	if frameSection == nil {
+		return nil, errors.New(".debug_frame section is not found")
+	}
+	debugFrame, err := frameSection.Data()
+	if err != nil {
+		return nil, err
+	}
+	frameEntries := frame.Parse(debugFrame)
+
 	return &SymbolTable{
 		table:            table,
 		dwarfData:        dwarfData,
 		runtimeETextAddr: runtimeETextAddr,
+		frameEntries:     frameEntries,
 	}, nil
 }
 
@@ -274,4 +296,76 @@ func (st *SymbolTable) GetFuncInfo(pc uint64) (funcName string, filename string,
 
 func (st *SymbolTable) GetRuntimeETextAddress() uint64 {
 	return st.runtimeETextAddr
+}
+
+func (st *SymbolTable) GetVariables(pc uint64, sp uint64) (variables []Variable, err error) {
+	reader, err := st.seekToFunction(pc)
+	if err != nil {
+		return nil, err
+	}
+
+	for entry, err := reader.Next(); entry != nil; entry, err = reader.Next() {
+		if err != nil {
+			return nil, err
+		}
+
+		if entry.Tag == dwarf.TagVariable {
+			name, _ := entry.Val(dwarf.AttrName).(string)
+
+			instructions, _ := entry.Val(dwarf.AttrLocation).([]byte)
+
+			offset, _ := entry.Val(dwarf.AttrType).(dwarf.Offset)
+
+			t, err := st.dwarfData.Type(offset)
+			if err != nil {
+				return nil, err
+			}
+
+			// TODO: get arbitrary variables and specify scope
+			targets := []string{"foo", "bar", "baz"}
+			if slices.Contains(targets, name) {
+				fde, err := st.frameEntries.FDEForPC(pc)
+				var cfa int64
+				if err == nil {
+					fctx := fde.EstablishFrame(pc)
+					cfa = fctx.CFAOffset() + int64(sp)
+				}
+				addr, err := frame.ExecuteStackProgram(cfa, instructions)
+				if err != nil {
+					return nil, err
+				}
+
+				variables = append(variables, Variable{Name: name, Address: uint64(addr), Type: t.String()})
+			}
+		}
+	}
+
+	return variables, nil
+}
+
+func (st *SymbolTable) seekToFunction(pc uint64) (*dwarf.Reader, error) {
+	reader := st.dwarfData.Reader()
+	reader.Seek(0)
+
+	for entry, err := reader.Next(); entry != nil; entry, err = reader.Next() {
+		if err != nil {
+			return nil, err
+		}
+
+		lowpc, ok := entry.Val(dwarf.AttrLowpc).(uint64)
+		if !ok {
+			continue
+		}
+
+		highpc, ok := entry.Val(dwarf.AttrHighpc).(uint64)
+		if !ok {
+			continue
+		}
+
+		if lowpc <= pc && highpc > pc {
+			return reader, nil
+		}
+	}
+
+	return nil, fmt.Errorf("faield to seek to function for pc: %x", pc)
 }

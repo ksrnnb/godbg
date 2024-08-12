@@ -308,12 +308,6 @@ func (d *Debugger) stepOverBreakpointIfNeeded() error {
 
 	fmt.Println("single step is executed")
 
-	newPC, err := d.getPC()
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("prev pc: %x, new pc: %x\n", pc, newPC)
 	if err := bp.Enable(); err != nil {
 		return err
 	}
@@ -451,8 +445,6 @@ func (d *Debugger) handleNextCommand() error {
 
 	filename, currentLine, _ := d.symTable.PCToLine(pc)
 
-	fmt.Printf("start line %d, end line: %d, current line: %d\n", startLine, endLine, currentLine)
-
 	var deletingBreakpointAddresses []uint64
 	for l := startLine; l <= endLine; l++ {
 		if l == currentLine {
@@ -463,8 +455,6 @@ func (d *Debugger) handleNextCommand() error {
 		if err != nil {
 			continue
 		}
-
-		fmt.Printf("file %s, line %d address is %0x\n", filename, l, addr)
 
 		_, ok := d.breakpoints[addr]
 		if ok {
@@ -574,8 +564,6 @@ func (d *Debugger) handleVariableCommand() error {
 	}
 
 	for _, variable := range variables {
-		// TODO: use CFA
-		// addr := int64(rsp) + 184 + variable.Offset
 		v, err := d.readInt(variable.Address)
 		if err != nil {
 			return err

@@ -601,9 +601,12 @@ func (d *Debugger) stepIn(filename string, line int) error {
 		return err
 	}
 
-	f, l, _ := d.symTable.PCToLine(pc)
-	if f == filename && l == line {
-		return d.stepIn(filename, line)
+	for f, l, _ := d.symTable.PCToLine(pc); f == filename && l == line; f, l, _ = d.symTable.PCToLine(pc) {
+		d.singleStepInstruction()
+		pc, err = d.getPC()
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil

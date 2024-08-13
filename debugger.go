@@ -136,7 +136,7 @@ func (d *Debugger) WaitSignal() (syscall.Signal, error) {
 	}
 
 	if ws.Stopped() {
-		d.logger.Debug("Process stopped with sigal", "signal", ws.StopSignal(), "cause", ws.TrapCause())
+		d.logger.Debug("Process stopped with signal", "signal", ws.StopSignal(), "cause", ws.TrapCause())
 		if err := d.handleStopSignal(); err != nil {
 			return ws.StopSignal(), err
 		}
@@ -182,7 +182,7 @@ func (d *Debugger) handleHitBreakpoint() error {
 		return err
 	}
 
-	fmt.Printf("hit breakpoint at address: 0x%x\n", newPC)
+	d.logger.Debug("hit breakpoint", "address", fmt.Sprintf("%0x", newPC))
 
 	return d.printSourceCode()
 }
@@ -199,7 +199,7 @@ func (d *Debugger) setBreakpoint(addr uint64) {
 	bp := NewBreakpoint(d.pid, addr)
 	bp.Enable()
 
-	fmt.Printf("set breakpoint at address: 0x%x\n", addr)
+	d.logger.Debug("set breakpoint", "address", fmt.Sprintf("%0x", addr))
 	d.breakpoints[addr] = bp
 }
 
@@ -255,8 +255,16 @@ func (d *Debugger) singleStepInstruction() error {
 		return err
 	}
 
-	_, err = d.WaitSignal()
-	return err
+	sig, err := d.WaitSignal()
+	if err != nil {
+		return err
+	}
+
+	if sig == sys.SIGURG {
+		return d.singleStepInstruction()
+	}
+
+	return nil
 }
 
 func (d *Debugger) stepOverBreakpointIfNeeded() error {
@@ -306,8 +314,6 @@ func (d *Debugger) stepOverBreakpointIfNeeded() error {
 		}
 	}
 
-	fmt.Println("single step is executed")
-
 	if err := bp.Enable(); err != nil {
 		return err
 	}
@@ -341,8 +347,13 @@ func (d *Debugger) continueInstruction() error {
 		return err
 	}
 
-	if _, err := d.WaitSignal(); err != nil {
+	sig, err := d.WaitSignal()
+	if err != nil {
 		return err
+	}
+
+	if sig == sys.SIGURG {
+		return d.continueInstruction()
 	}
 
 	return nil

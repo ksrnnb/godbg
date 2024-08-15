@@ -31,9 +31,9 @@ func printSourceCode(reader io.Reader, line int) {
 
 		text := scanner.Text()
 		if currentLine == line {
-			text = fmt.Sprintf("> %s", text)
+			text = fmt.Sprintf("> %d %s", currentLine, text)
 		} else {
-			text = fmt.Sprintf("  %s", text)
+			text = fmt.Sprintf("  %d %s", currentLine, text)
 		}
 		lines = append(lines, text)
 		currentLine++

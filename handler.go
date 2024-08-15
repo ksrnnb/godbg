@@ -35,7 +35,7 @@ func (h *Handler) Run() error {
 			return err
 		}
 
-		fmt.Printf("godbg> ")
+		fmt.Printf("\ngodbg> ")
 	}
 
 	return nil
